@@ -27,6 +27,7 @@ pragma solidity ^0.8.19;
 import {DecentralizedStableCoin} from "./DecentralizedStableCoin.sol";
 import {ReentrancyGuard} from "../lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "../lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {AggregatorV3Interface} from "../lib/chainlink-brownie-contracts/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 
 /**
  * @title DSCEngine
@@ -74,6 +75,7 @@ contract DSCEngine is ReentrancyGuard {
     error DSCEngine__TransferFailed();
     error DSCEngine__TokenAddressesAndPriceFeedAddressesMustBeSameLength();
     error DSCEngine__BreaksHealthFactor(uint256 userHealthFactor);
+    error DSCEngine__MintFailed();
 
     ///////////////
     // Events
@@ -117,7 +119,7 @@ contract DSCEngine is ReentrancyGuard {
         }
 
         for (uint256 i = 0; i < tokenAddresses.length; i++) {
-            tokenAddresses[i] = priceFeedAddresses[i];
+            s_priceFeeds[tokenAddresses[i]] = priceFeedAddresses[i];
             s_collateralTokens.push(tokenAddresses[i]);
         }
 
@@ -128,7 +130,20 @@ contract DSCEngine is ReentrancyGuard {
     // External Functions
     //////////////
 
-    function depositCollateralAndMintDsc() external {}
+    /*
+     * @param tokenCollateralAddress: The ERC20 token address of the collateral you're depositing
+     * @param amountCollateral: The amount of collateral you're depositing
+     * @param amountDscToMint: The amount of DSC you want to mint
+     * @notice This function will deposit your collateral and mint DSC in one transaction
+     */
+    function depositCollateralAndMintDsc(
+        address tokenCollateralAddress,
+        uint256 amountCollateral,
+        uint256 amountDscToMint
+    ) external {
+        depositCollateral(tokenCollateralAddress, amountCollateral);
+        mintDsc(amountDscToMint);
+    }
 
     /*
      * @notice follows CEI (Checks, Effects, Interactions)
@@ -140,7 +155,7 @@ contract DSCEngine is ReentrancyGuard {
         address tokenCollateralAddress,
         uint256 amountCollateral
     )
-        external
+        public
         moreThanZero(amountCollateral)
         isAllowedToken(tokenCollateralAddress)
         nonReentrant
@@ -173,9 +188,15 @@ contract DSCEngine is ReentrancyGuard {
      * @param amountDscToMint The amount of decentralized stable coin to mint
      * @param they must have more collateral value than the minimum threshold
      */
-    function mintDsc(uint256 amountDscToMint) external {
+    function mintDsc(
+        uint256 amountDscToMint
+    ) public moreThanZero(amountDscToMint) nonReentrant {
         s_DscMinted[msg.sender] += amountDscToMint;
         _revertIfHealthFactorIsBroken(msg.sender);
+        bool minted = i_dsc.mint(msg.sender, amountDscToMint);
+        if (!minted) {
+            revert DSCEngine__MintFailed();
+        }
     }
 
     function burnDsc() external {}
@@ -242,11 +263,12 @@ contract DSCEngine is ReentrancyGuard {
     function getUsdValue(
         address token,
         uint256 amount
-    ) private view returns (uint256) {
+    ) public view returns (uint256) {
         AggregatorV3Interface priceFeed = AggregatorV3Interface(
             s_priceFeeds[token]
         );
-        uint256 price = priceFeed.latestRoundData();
-        return uint256(price) * ADDITIONAL_FEED_PRECISION * amount;
+        (, int256 price, , , ) = priceFeed.latestRoundData();
+        return
+            (uint256(price) * ADDITIONAL_FEED_PRECISION * amount) / PRECISION;
     }
 }
