@@ -15,3 +15,6 @@ docs/
 
 # Vscode Settings
 .vscode
+
+# Report on test coverage
+report.txt
